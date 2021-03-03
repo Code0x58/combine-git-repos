@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -o pipefail -o errexit -o nounset
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+
+workspace="$(mktemp --directory)"
+cd "$workspace"
+
+git clone --quiet https://github.com/sindresorhus/awesome
+git clone --quiet https://github.com/vinta/awesome-python
+git clone --quiet https://github.com/rust-unofficial/awesome-rust
+
+OUTPUT_DIR="$HERE"/combined-repo "$HERE"/combine-git-repos \
+    "$PWD/awesome"        "awesome/meta" \
+    "$PWD/awesome-python" "awesome/language/python" \
+    "$PWD/awesome-rust"   "awesome/language/rust"

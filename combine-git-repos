@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+:<<'DOC'
+The idea for this is to convert a tree of repositories into a monorepo.
+
+If the destination path of any repository is changed, then set PURGE in
+the environment to delete the existing output, and clean up the state
+branches in the individual repositories.
+
+The aim is to merge multile git repositories into the given paths of a
+new repo, with their histories preserved.
+
+Example use:
+    OUTPUT_DIR=./combined-repo combine-git-repos \
+        "~/src/input-repo-1"                 "path/to/subrepo-1" \
+        "~/src/input-repo-2"                 "path/to/subrepo-2" \
+        "~/src/input-repo-3"                 "path/to/subrepo-3"
+DOC
+
+set -o pipefail -o errexit -o nounset
+
+export FILTER_BRANCH_SQUELCH_WARNING=1
+REWRITTEN_BRANCH="mono-repo-relocation"
+
+OUTPUT_DIR="${OUTPUT_DIR-$PWD/output}"
+
+
+function rewrite_and_merge_repos {
+    if [ -n "${PURGE:-}" ]; then
+       rm -fr "$OUTPUT_DIR" 
+    fi
+    if ! [ -d "$OUTPUT_DIR/.git" ]; then
+        mkdir -p "$OUTPUT_DIR"
+        git -C "$OUTPUT_DIR" init .
+    fi
+
+    i=1
+    while [ $# -ne 0 ]; do
+        local repo_in="$1" new_path="$2"
+        shift 2
+
+        repo_name="input-$i"
+        echo "scanning $repo_in"
+        # fetch the latest remote HEAD (not necessarily master)
+        git -C "$repo_in" fetch origin HEAD
+        if [[ -z "$(cat "$repo_in/.git/FETCH_HEAD")" ]]; then
+            echo "  skipping as repository is empty"
+            continue
+        fi
+        rewrite_repo_branch "$repo_in" "$repo_name" "$new_path"
+        i=$((i + 1))
+    done
+    ensure_main_branch
+    merge_branches
+}
+
+
+function rewrite_repo_branch {
+    local repo="$1"
+    local name="$2"
+    local new_path="$3"
+    local index_filter
+    index_filter="$(cat <<CODE
+        git ls-files -s \
+            | sed 's#.#&$new_path/#50' \
+            | GIT_INDEX_FILE=\$GIT_INDEX_FILE.new git update-index --index-info \
+            && mv "\$GIT_INDEX_FILE.new" "\$GIT_INDEX_FILE"
+CODE
+    )"
+    git -C "$repo" checkout -B "$REWRITTEN_BRANCH" origin/HEAD
+
+    if [ -n "${PURGE:-}" ]; then
+        rm "$repo/.git/$REWRITTEN_BRANCH-state"
+    fi
+
+    NEW_PATH="$name" git -C "$repo" filter-branch \
+        --setup "rm -f \$GIT_INDEX_FILE.new" \
+        --state-branch "$REWRITTEN_BRANCH-state" --force \
+        --index-filter "$index_filter" \
+        HEAD
+
+    git -C "$OUTPUT_DIR" remote rm "$name" 2>/dev/null >/dev/null || true
+    git -C "$OUTPUT_DIR" remote add --fetch --master="$REWRITTEN_BRANCH" "$name" "$repo"
+    git -C "$OUTPUT_DIR" checkout -B "$REWRITTEN_BRANCH/$name" "$name/$REWRITTEN_BRANCH" 
+  
+}
+
+function ensure_main_branch {
+    # if the branch main branch doesn't exist, make it and clean out the dirty index
+    if ! git -C "$OUTPUT_DIR" rev-parse --verify master 2>/dev/null >/dev/null; then
+        git -C "$OUTPUT_DIR" checkout --orphan=master
+        git -C "$OUTPUT_DIR" rm -rf . 2>/dev/null >/dev/null || true
+        git -C "$OUTPUT_DIR" commit --allow-empty --message="Initial empty commit"
+    fi
+}
+
+function merge_branches {
+    git -C "$OUTPUT_DIR" checkout master
+    head=master
+    # merge all of the branches
+    if ! git -C "$OUTPUT_DIR" branch --list "$REWRITTEN_BRANCH/*" | cut -b3- | xargs git -C "$OUTPUT_DIR" merge --allow-unrelated-histories; then
+        # the merge will partially fail during the first merge, so this finishes it
+        # read tree can't handle more than 8 branches at a time
+        for branch in $(git -C "$OUTPUT_DIR" branch --list "$REWRITTEN_BRANCH/*" | cut -b3-); do
+            git -C "$OUTPUT_DIR" read-tree "$head" "$branch"
+            head=$(git -C "$OUTPUT_DIR" write-tree)
+        done
+        git -C "$OUTPUT_DIR" checkout-index -fua
+        git -C "$OUTPUT_DIR" commit -am "Initial merge of all remapped repositories"
+    fi
+}
+
+rewrite_and_merge_repos "$@"
