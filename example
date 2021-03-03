@@ -13,3 +13,7 @@ OUTPUT_DIR="$HERE"/combined-repo "$HERE"/combine-git-repos \
     "$PWD/awesome"        "awesome/meta" \
     "$PWD/awesome-python" "awesome/language/python" \
     "$PWD/awesome-rust"   "awesome/language/rust"
+
+[ -d "$HERE/combined-repo/awesome/meta" ]
+[ -d "$HERE/combined-repo/awesome/language/python" ]
+[ -d "$HERE/combined-repo/awesome/language/rust" ]

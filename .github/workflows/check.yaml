@@ -1,0 +1,14 @@
+name: Basic quality checks
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-20.04
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v2
+      with:
+        fetch-depth: 0
+    - name: Configure git
+      run: git config --global user.name "Name" && git config --global user.email "<name@example.com>"
+    - name: Smoke test
+      run: ./example
